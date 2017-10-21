@@ -33,12 +33,12 @@ func setup(c *caddy.Controller) error {
 	cfg := httpserver.GetConfig(c)
 	root := cfg.Root
 
-	rules, err := basicAuthParse(c)
+	rules, bypassIP, err := basicAuthParse(c)
 	if err != nil {
 		return err
 	}
 
-	basic := BasicAuth{Rules: rules}
+	basic := BasicAuth{Rules: rules, BypassIP: bypassIP}
 
 	cfg.AddMiddleware(func(next httpserver.Handler) httpserver.Handler {
 		basic.Next = next
@@ -49,8 +49,9 @@ func setup(c *caddy.Controller) error {
 	return nil
 }
 
-func basicAuthParse(c *caddy.Controller) ([]Rule, error) {
+func basicAuthParse(c *caddy.Controller) ([]Rule, []string, error) {
 	var rules []Rule
+	var bypassIP []string
 	cfg := httpserver.GetConfig(c)
 
 	var err error
@@ -63,45 +64,45 @@ func basicAuthParse(c *caddy.Controller) ([]Rule, error) {
 		case 2:
 			rule.Username = args[0]
 			if rule.Password, err = passwordMatcher(rule.Username, args[1], cfg.Root); err != nil {
-				return rules, c.Errf("Get password matcher from %s: %v", c.Val(), err)
+				return rules, bypassIP, c.Errf("Get password matcher from %s: %v", c.Val(), err)
 			}
 		case 3:
 			rule.Resources = append(rule.Resources, args[0])
 			rule.Username = args[1]
 			if rule.Password, err = passwordMatcher(rule.Username, args[2], cfg.Root); err != nil {
-				return rules, c.Errf("Get password matcher from %s: %v", c.Val(), err)
+				return rules, bypassIP, c.Errf("Get password matcher from %s: %v", c.Val(), err)
 			}
 		default:
-			return rules, c.ArgErr()
+			return rules, bypassIP, c.ArgErr()
 		}
 
 		// If nested block is present, process it here
 		for c.NextBlock() {
 			val := c.Val()
 			args = c.RemainingArgs()
-			switch len(args) {
-			case 0:
+			if len(args) == 0 {
 				// Assume single argument is path resource
 				rule.Resources = append(rule.Resources, val)
-			case 1:
-				if val == "realm" {
+			} else {
+				switch val {
+				case "realm":
 					if rule.Realm == "" {
 						rule.Realm = strings.Replace(args[0], `"`, `\"`, -1)
 					} else {
-						return rules, c.Errf("\"realm\" subdirective can only be specified once")
+						return rules, bypassIP, c.Errf("\"realm\" subdirective can only be specified once")
 					}
-				} else {
-					return rules, c.Errf("expecting \"realm\", got \"%s\"", val)
+				case "bypassip":
+					bypassIP = append(bypassIP, args...)
+				default:
+					return rules, bypassIP, c.ArgErr()
 				}
-			default:
-				return rules, c.ArgErr()
 			}
 		}
 
 		rules = append(rules, rule)
 	}
 
-	return rules, nil
+	return rules, bypassIP, nil
 }
 
 func passwordMatcher(username, passw, siteRoot string) (PasswordMatcher, error) {

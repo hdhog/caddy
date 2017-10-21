@@ -26,6 +26,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -45,12 +46,29 @@ type BasicAuth struct {
 	Next     httpserver.Handler
 	SiteRoot string
 	Rules    []Rule
+	BypassIP []string
 }
 
 // ServeHTTP implements the httpserver.Handler interface.
 func (a BasicAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, error) {
 	var protected, isAuthenticated bool
 	var realm string
+
+	remoteIPStr, _, _ := net.SplitHostPort(r.RemoteAddr)
+	remoteIP := net.ParseIP(remoteIPStr)
+
+	for _, bip := range a.BypassIP {
+		if _, snet, err := net.ParseCIDR(bip); err == nil {
+			if snet.Contains(remoteIP) {
+				return a.Next.ServeHTTP(w, r)
+			}
+		}
+		if ip := net.ParseIP(bip); ip != nil {
+			if ip.Equal(remoteIP) {
+				return a.Next.ServeHTTP(w, r)
+			}
+		}
+	}
 
 	for _, rule := range a.Rules {
 		for _, res := range rule.Resources {
